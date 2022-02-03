@@ -28,8 +28,8 @@
 			      <td>Income</td>
 			      <td>{{inc.category}}</td>
 			      <td></td>
-			      <td>{{inc.amount}}</td>
-			      <td>{{total[loop.index - 1]}}</td>
+			      <td>{{inc.amount | currencyFormat}}</td>
+			      <td>{{total[loop.index - 1] | currencyFormat}}</td>
 			    </tr>
 		    {% endfor %}
 
@@ -39,9 +39,9 @@
 			      <td>{{exp.date.date()}}</td>
 			      <td>Expense</td>
 			      <td>{{exp.item}}</td>
-			      <td>{{exp.amount}}</td>
+			      <td>{{exp.amount | currencyFormat}}</td>
 			      <td></td>
-			      <td>{{total[loop.index + len -1]}}</td>
+			      <td>{{total[loop.index + len -1] | currencyFormat}}</td>
 			    </tr>
 		    {% endfor %}
 		  </tbody>
@@ -51,9 +51,10 @@
 		      <td>TOTAL</td>
 		      <td></td>
 		      <td></td>
-		      <td>{{exp_cum[-1]}}</td>
-		      <td>{{inc_cum[-1]}}</td>
-		      <td>{{inc_cum[-1] - exp_cum[-1]}}</td>
+		      <td>{{exp_cum[-1] | currencyFormat}}</td>
+		      <td>{{inc_cum[-1] | currencyFormat}}</td>
+		      {% set tots =inc_cum[-1] - exp_cum[-1] %}
+		      <td>{{ tots | currencyFormat }}</td>
 		    </tr>
 		  </tfoot>
 		</table>

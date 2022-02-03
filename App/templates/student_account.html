@@ -35,19 +35,20 @@
 		      <th scope="row">2</th>
 		      <td>Term Fee</td>
 		      <td>Thornton</td>
-		      <td>{{terminal_fee}}</td>
+		      <td>{{terminal_fee | currencyFormat}}</td>
 		    </tr>
 		    <tr>
 		      <th scope="row">2</th>
 		      <td>Paid</td>
 		      <td>Thornton</td>
-		      <td>{{total_pmt}}</td>
+		      <td>{{total_pmt | currencyFormat}}</td>
 		    </tr>
 		    <tr>
 		      <th scope="row">2</th>
 		      <td>Balance</td>
 		      <td>Thornton</td>
-		      <td>{{terminal_fee - total_pmt}}</td>
+		      {% set fees = terminal_fee - total_pmt%}
+		      <td>{{fees | currencyFormat}}</td>
 		    </tr>
 		    <tr>
 		      <th scope="row">2</th>
@@ -77,9 +78,9 @@
 		      <td>2022-01-01</td>
 		      <td>Debit Balance</td>
 		      <td></td>
-		      <td>{{terminal_fee}}</td>
+		      <td>{{terminal_fee | currencyFormat}}</td>
 		      <td></td>
-		      <td>{{terminal_fee}}</td>
+		      <td>{{terminal_fee | currencyFormat}}</td>
 		    </tr>
 		  	{% for bal, amt in zip1 %}
 		    <tr>
@@ -88,8 +89,8 @@
 		      <td>{{amt.category}}</td>
 		      <td>{{amt.mode_of_payment}}</td>
 		      <td></td>
-		      <td>{{amt.amount}}</td>
-		      <td>{{bal}}</td>
+		      <td>{{amt.amount | currencyFormat}}</td>
+		      <td>{{bal | currencyFormat}}</td>
 		    </tr>
 		    {% endfor %}
 		  </tbody>
@@ -101,7 +102,7 @@
 		      <td></td>
 		      <td></td>
 		      <td></td>
-		      <td>{{cum1[-1]}}</td>
+		      <td>{{cum1[-1] | currencyFormat}}</td>
 		    </tr>
 		  </tfoot>
 		</table>

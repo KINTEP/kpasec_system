@@ -2,13 +2,17 @@ from flask import Flask, render_template, flash, url_for, redirect, request, sen
 from flask_sqlalchemy import SQLAlchemy
 from flask_wtf import FlaskForm
 from wtforms import StringField, SubmitField, TextAreaField, PasswordField, BooleanField, SelectField, DateField
-from wtforms.validators import DataRequired, Email, EqualTo
+from wtforms.validators import DataRequired, Email, EqualTo, Length
 from datetime import datetime
 from flask_bcrypt import Bcrypt
 from flask_login import LoginManager, UserMixin, login_user, current_user, logout_user, login_required
 import requests
 from numpy import cumsum, array
 import uuid
+import datetime as dt
+from sqlalchemy.sql import extract
+from flask_admin import Admin
+from flask_admin.contrib.sqla import ModelView
 
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///kpasec.db'
@@ -19,7 +23,15 @@ bcrypt = Bcrypt(app)
 login_manager = LoginManager(app)
 login_manager.login_view = 'login'
 
+
+
 terminal_fee = 1200
+
+@app.template_filter()
+def currencyFormat(value):
+    value = float(value)
+    return "{:,.2f}".format(value)
+
 
 def generate_receipt_no():
 	#Also generate transaction ids
@@ -31,7 +43,7 @@ def load_user(user_id):
 
 @app.route("/")
 def home():
-    return render_template("home.html")
+    return render_template("homepage.html")
 
 @app.route("/register_user", methods = ['GET', 'POST'])
 def register_user():
@@ -61,7 +73,7 @@ def login():
 		if user and bcrypt.check_password_hash(user.password, form.password.data):
 			login_user(user, remember=form.remember.data)
 			next_page = request.args.get('next')
-			return redirect(next_page) if next_page else redirect(url_for('account'))
+			return redirect(next_page) if next_page else redirect(url_for('data_entry_clerk'))
 		else:
 			flash("Login unsuccessful, please try again", "danger")
 	return render_template("login_user.html", form=form)
@@ -91,7 +103,7 @@ def student_data():
 			db.session.add(data)
 			db.session.commit()
 		flash(f"Account successfully created for {form.name.data}", "success")
-		return redirect(url_for("student_data"))
+		return redirect(url_for("data_entry_clerk"))
 	return render_template("student_data.html", form=form)
 
 @app.route("/student_payment", methods = ['GET', 'POST'])
@@ -108,13 +120,14 @@ def student_payment():
 			mode_of_payment = form.data['mode_of_payment']
 			data = StudentPayments(student_fullname=fullname, amount=amount, 
 				category=category, mode_of_payment=mode_of_payment, student_id = parent_contact, semester=semester)
+			balance = int(obtain_cash_book_balances())
 			cash = CashBook(name=fullname, details=category, amount=amount, category="revenue", 
-				semester=semester, mode_of_payment=mode_of_payment)
+				semester=semester, mode_of_payment=mode_of_payment, balance=balance)
 			db.session.add(data)
 			db.session.add(cash)
 			db.session.commit()
 		flash(f"{form.amount.data} {form.category.data} fees successfully paid by {form.fullname.data}", "success")
-		return redirect(url_for("student_payment"))
+		return redirect(url_for("data_entry_clerk"))
 	return render_template("student_payment.html", form=form)
 
 @app.route("/expenses", methods = ['GET', 'POST'])
@@ -132,13 +145,14 @@ def expenses():
 			mode_of_payment = form.data['mode_of_payment']
 			data = Expenses(item=item, details=details, amount=amount, 
 				category=category, mode_of_payment=mode_of_payment,semester=semester,name=name)
+			balance = int(obtain_cash_book_balances())
 			cash = CashBook(name=name, details=details, amount=amount, category="payment", 
-				semester=semester, mode_of_payment=mode_of_payment)
+				semester=semester, mode_of_payment=mode_of_payment, balance=str(balance))
 			db.session.add(data)
 			db.session.add(cash)
 			db.session.commit()
 			flash("Data successfully saved", "success")
-		return redirect(url_for("expenses"))
+		return redirect(url_for("data_entry_clerk"))
 	return render_template("expenses.html", form=form)
 
 @app.route("/account")
@@ -204,7 +218,7 @@ def cashbook():
 	start = request.args.get("startdate")
 	end = request.args.get("enddate")
 	cash_data = CashBook.query.filter_by(semester = "SEM1")
-	cash_cums1 = [2000]
+	cash_cums1 = []
 	revs = []
 	pays = []
 	for money in cash_data:
@@ -219,6 +233,13 @@ def cashbook():
 	sum2 = sum(pays)
 	return render_template("cashbook.html", cash_data = cash_data, 
 		cash_cums=cash_cums, sum1=sum1, sum2=sum2)
+
+@app.route("/charges")
+@login_required
+def charges():
+	form = ChargeForm()
+	return render_template("charges.html", form=form)
+
 
 @app.route("/expenditure_template")
 @login_required
@@ -244,8 +265,8 @@ def cash_book_template(cash_data, cash_cums, sum1, sum2, start_date, end_date):
 	return render_template("cashbook.html", cash_data = cash_data, 
 		cash_cums=cash_cums, sum1=sum1, sum2=sum2, start_date=start_date, end_date=end_date)
 
-def extract_cash_book_data(cash_obj, balance_bf):
-	cash_cums1 = [balance_bf]
+def extract_cash_book_data(cash_obj):
+	cash_cums1 = [cash_obj[0].balance]
 	revs = []
 	pays = []
 	for money in cash_obj:
@@ -290,6 +311,7 @@ def extract_income_and_expense_data(inc_obj, exp_obj):
 	total = list(cumsum(arr3))
 	return inc_obj, inc_cum, exp_obj, exp_cum, total
 
+
 @app.route("/reports")
 @login_required
 def reports():
@@ -298,55 +320,97 @@ def reports():
 	start = request.args.get("start")
 	end = request.args.get("end")
 	filter1 = request.args.get("filter_by")
+	
 	if report == "Cash Book":
+		end1 = dt.datetime.strptime(end, "%Y-%m-%d").date() + dt.timedelta(1)
 		if filter1 != "ETL & PTA Levy":
-			cash_filter = CashBook.query.filter(CashBook.date <= end).filter(CashBook.date >= start).filter(CashBook.details==filter1).all()
-			cash_obj1, cash_cums, sum1, sum2 = extract_cash_book_data(cash_obj=cash_filter, balance_bf=2000)
+			cash_filter = CashBook.query.filter(CashBook.date <= end1).filter(CashBook.date >= start).filter(CashBook.details==filter1).all()
+			cash_obj1, cash_cums, sum1, sum2 = extract_cash_book_data(cash_obj=cash_filter)
 			return cash_book_template(cash_data=cash_obj1, cash_cums=cash_cums, sum1=sum1, sum2=sum2, start_date=start, end_date=end)
 		else:
-			cash_filter = CashBook.query.filter(CashBook.date <= end).filter(CashBook.date >= start).all()
-			cash_obj1, cash_cums, sum1, sum2 = extract_cash_book_data(cash_obj=cash_filter, balance_bf=2000)
+			cash_filter = CashBook.query.filter(CashBook.date <= end1).filter(CashBook.date >= start).all()
+			cash_obj1, cash_cums, sum1, sum2 = extract_cash_book_data(cash_obj=cash_filter)
 			return cash_book_template(cash_data=cash_obj1, cash_cums=cash_cums, sum1=sum1, sum2=sum2, start_date=start, end_date=end)
 	if report == "Income & Expenditure":
-		inc_by_date = StudentPayments.query.filter(StudentPayments.date <= end).filter(StudentPayments.date >= start)
-		exp_by_date = Expenses.query.filter(Expenses.date <= end).filter(Expenses.date >= start)
+		end1 = dt.datetime.strptime(end, "%Y-%m-%d").date() + dt.timedelta(1)
+		inc_by_date = StudentPayments.query.filter(StudentPayments.date <= end1).filter(StudentPayments.date >= start)
+		exp_by_date = Expenses.query.filter(Expenses.date <= end1).filter(Expenses.date >= start)
 		inc_obj, inc_cum, exp_obj, exp_cum, total = extract_income_and_expense_data(inc_obj=inc_by_date, exp_obj=exp_by_date)
 		return income_expenditure_template(income=list(inc_obj), inc_cum=inc_cum, expense=exp_obj, exp_cum=exp_cum, total=total, start_date=start, end_date=end)
 	if report == "Income Statement":
+		end1 = dt.datetime.strptime(end, "%Y-%m-%d").date() + dt.timedelta(1)
 		if filter1 != "ETL & PTA Levy":
-			inc_by_date = StudentPayments.query.filter(StudentPayments.date <= end).filter(StudentPayments.date >= start).filter(StudentPayments.category == filter1).all()
+			inc_by_date = StudentPayments.query.filter(StudentPayments.date <= end1).filter(StudentPayments.date >= start).filter(StudentPayments.category == filter1).all()
 			income, inc_cum = extract_icome_data(inc_obj = inc_by_date)
-			return income_template(income=income, inc_cum=inc_cum, start_date=start, end_date=end)
+			return income_template(income=income, inc_cum=inc_cum, start_date=start, end_date=end1)
 		else:
-			inc_by_date = StudentPayments.query.filter(StudentPayments.date <= end).filter(StudentPayments.date >= start).all()
+			inc_by_date = StudentPayments.query.filter(StudentPayments.date <= end1).filter(StudentPayments.date >= start).all()
 			income, inc_cum = extract_icome_data(inc_obj = inc_by_date)
 			return income_template(income=income, inc_cum=inc_cum, start_date=start, end_date=end)
 	if report == "Expenditure Statement":
-		exp_by_date = Expenses.query.filter(Expenses.date <= end).filter(Expenses.date >= start).all()
+		end1 = dt.datetime.strptime(end, "%Y-%m-%d").date() + dt.timedelta(1)
+		exp_by_date = Expenses.query.filter(Expenses.date <= end1).filter(Expenses.date >= start).all()
 		expense, exp_cum = extract_expense_data(exp_obj=exp_by_date)
 		return expenditure_template(expense=expense, exp_cum=exp_cum, start_date=start, end_date=end)
 	return render_template("reports.html", form=form)
 
+
+@app.route("/data_entry_clerk")
+@login_required
+def data_entry_clerk():
+	today = datetime.now()
+	year = today.year
+	month = today.month
+	day = today.day
+	exp = Expenses.query.filter(extract('year', Expenses.date) == year).filter(extract('month', Expenses.date) == month).filter(extract('day', Expenses.date) == day).all()
+	inc_month = StudentPayments.query.filter(extract('year', StudentPayments.date) == year).filter(extract('month', StudentPayments.date) == month).all()
+	exp_month = Expenses.query.filter(extract('year', Expenses.date) == year).filter(extract('month', Expenses.date) == month).all()
+	inc = StudentPayments.query.filter(extract('year', StudentPayments.date) == year).filter(extract('month', StudentPayments.date) == month).filter(extract('day', StudentPayments.date) == day).all()
+	values = sum([val.amount for val in exp])
+	values2 = sum([val.amount for val in inc])
+	exp_m = sum([val.amount for val in exp_month])
+	inc_m = sum([val.amount for val in inc_month])
+	inc_cum = cumsum([val.amount for val in inc])
+	exp_cum = cumsum([val.amount for val in exp])
+	now1 = str(datetime.utcnow().date()).replace("-","/")
+	return render_template("data_entry_clerk.html", now1=now1, values=values, values2=values2, exp_m=exp_m, inc_m=inc_m, exp=exp, inc=inc, inc_cum=inc_cum, exp_cum=exp_cum)
+
+@app.route("/accountant")
+def accountant():
+	return render_template("accountant.html")
 
 
 #FORMS
 class UserSignUpForm(FlaskForm):
     username = StringField("Name", validators=[DataRequired()])
     email = StringField("Email", validators=[DataRequired(), Email()])
-    password = PasswordField("Password", validators=[DataRequired()])
+    password = PasswordField("Password", validators=[DataRequired(), Length(min=8, max=20)])
     confirm_password = PasswordField("Comfirm Password", 
     	validators = [DataRequired(), EqualTo('password')])
     submit = SubmitField("Sign Up")
 
-    #def validate_email(self, email):
-    #	user = User.query.filter_by(email=email).first()
-    #	if user:
-    #		raise ValueError("The email is already in use, please choose a different one")
+    def validate_email(self, email):
+    	user = User.query.filter_by(email=email.data).first()
+    	if user:
+    		raise ValueError("The email is already in use, please choose a different one")
+
+class UpdateUserInfo(FlaskForm):
+    username = StringField("Name", validators=[DataRequired()])
+    email = StringField("Email", validators=[DataRequired(), Email()])
+    password = PasswordField("Password", validators=[DataRequired(), Length(min=8, max=20)])
+    confirm_password = PasswordField("Comfirm Password", 
+    	validators = [DataRequired(), EqualTo('password')])
+    submit = SubmitField("Sign Up")
+
+    def validate_email(self, email):
+    	user = User.query.filter_by(email=email.data).first()
+    	if user:
+    		raise ValueError("The email is already in use, please choose a different one")
 
 class UserLogInForm(FlaskForm):
-    email = StringField("Email: ", validators=[DataRequired(), Email()])
+    email = StringField("Email", validators=[DataRequired(), Email()])
     password = PasswordField("Password", validators=[DataRequired()])
-    remember = BooleanField("Remember me:")
+    remember = BooleanField("Remember me")
     submit = SubmitField("Log In")
 
 classes = [str(i) + "A" for i in range(1,7)]
@@ -355,29 +419,64 @@ class StudentSignUp(FlaskForm):
     name = StringField("Full Name", validators=[DataRequired()])
     email = StringField("Email", validators=[DataRequired()])
     class1 = SelectField("Class", validators=[DataRequired()], choices = classes)
-    parent_contact = StringField("Parent Contact", validators=[DataRequired()])
+    parent_contact = StringField("Parent Contact", validators=[DataRequired(), Length(min=10, max=10)])
     submit = SubmitField("Create")
 
-    #def validate_email(self, email):
-    	#student = Student.query.filter_by(email=email).first()
-    	#if student:
-    	#	raise ValueError("The email is already in use, please choose a different one")
+    def validate_email(self, email):
+    	student = Student.query.filter_by(email=email.data).first()
+    	if student:
+    		raise ValueError("The email is already in use, please choose a different one")
 
-    #def validate_contact(self, parent_contact):
-    #	student = Student.query.filter_by(parent_contact=parent_contact).first()
-    #	if student:
-    #		raise ValueError("The contact is already in use, please choose a different one")
+    def validate_contact(self, parent_contact):
+    	student = Student.query.filter_by(parent_contact=parent_contact.data).first()
+    	if student:
+    		raise ValueError("The contact is already in use, please choose a different one")
+
+class UpdateStudentInfo(FlaskForm):
+    name = StringField("Full Name", validators=[DataRequired()])
+    email = StringField("Email", validators=[DataRequired()])
+    class1 = SelectField("Class", validators=[DataRequired()], choices = classes)
+    parent_contact = StringField("Parent Contact", validators=[DataRequired(), Length(min=10, max=10)])
+    submit = SubmitField("Create")
+
+    def validate_email(self, email):
+    	student = Student.query.filter_by(email=email.data).first()
+    	if student:
+    		raise ValueError("The email is already in use, please choose a different one")
+
+    def validate_contact(self, parent_contact):
+    	student = Student.query.filter_by(parent_contact=parent_contact.data).first()
+    	if student:
+    		raise ValueError("The contact is already in use, please choose a different one")
 
 class StudentPaymentsForm(FlaskForm):
     fullname = StringField("Name: ", validators=[DataRequired()])
-    parent_contact = StringField("Parent Contact: ", validators=[DataRequired()])
+    parent_contact = StringField("Parent Contact ", validators=[DataRequired()])
     amount = StringField("Amount", validators=[DataRequired()])
-    semester = SelectField("Payment mode:", choices = ["SEM"+str(i) for i in range(1,7)], validators=[DataRequired()])
-    mode_of_payment = SelectField("Payment mode:", choices = ['Cash', 'Cheque', 'Momo'], validators=[DataRequired()])
-    category = SelectField("Category: ", choices = ['PTA Levy', 'ETL', 'Both'], validators = [DataRequired()])
+    semester = SelectField("Semester", choices = ["SEM"+str(i) for i in range(1,7)], validators=[DataRequired()])
+    mode_of_payment = SelectField("Payment mode", choices = ['Cash', 'Cheque', 'Momo'], validators=[DataRequired()])
+    category = SelectField("Category: ", choices = ['PTA Levy', 'ETL', 'ETL & PTA Levy'], validators = [DataRequired()])
+    submit = SubmitField("Pay")
+
+class UpdateStudentPayment(FlaskForm):
+    fullname = StringField("Name: ", validators=[DataRequired()])
+    parent_contact = StringField("Parent Contact ", validators=[DataRequired()])
+    amount = StringField("Amount", validators=[DataRequired()])
+    semester = SelectField("Semester", choices = ["SEM"+str(i) for i in range(1,7)], validators=[DataRequired()])
+    mode_of_payment = SelectField("Payment mode", choices = ['Cash', 'Cheque', 'Momo'], validators=[DataRequired()])
+    category = SelectField("Category: ", choices = ['PTA Levy', 'ETL', 'ETL & PTA Levy'], validators = [DataRequired()])
     submit = SubmitField("Pay")
 
 class ExpensesForm(FlaskForm):
+    item = StringField("Item Name", validators=[DataRequired()])
+    details = StringField("Details", validators=[DataRequired()])
+    amount = StringField("Amount", validators=[DataRequired()])
+    category = StringField("Category", validators=[DataRequired()])
+    semester = SelectField("Semester", choices = ["SEM"+str(i) for i in range(1,7)], validators=[DataRequired()])
+    mode_of_payment = SelectField("Payment mode", choices = ['Cash', 'Cheque', 'Momo'], validators=[DataRequired()])
+    submit = SubmitField("Submit")
+
+class UpdateExpensesForm(FlaskForm):
     item = StringField("Item Name", validators=[DataRequired()])
     details = StringField("Details", validators=[DataRequired()])
     amount = StringField("Amount", validators=[DataRequired()])
@@ -394,7 +493,12 @@ class ReportsForm(FlaskForm):
     end = DateField("End", validators=[DataRequired()])
     submit = SubmitField("Submit")
 
-
+class ChargeForm(FlaskForm):
+    semester = SelectField("Choose semester", validators=[DataRequired()], 
+    	choices = ['SEM'+str(i) for i in range(1,7)])
+    pta_levy = StringField("PTA Levy", validators=[DataRequired()])
+    etl = StringField("ETL", validators=[DataRequired()])
+    submit = SubmitField("Submit")
 
 
 #DATABASES
@@ -456,9 +560,36 @@ class CashBook(db.Model):
     category = db.Column(db.String(100), nullable = False)
     semester = db.Column(db.String(100), nullable = False)
     mode_of_payment = db.Column(db.String(100), nullable = False)
+    balance = db.Column(db.Integer, nullable=False)
 
     def __repr__(self):
         return f'User: {self.name}'
+
+class Charges(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    date = db.Column(db.DateTime, default = datetime.utcnow())
+    elt = db.Column(db.Integer, unique=False, nullable=False)
+    pta_levy = db.Column(db.Integer, unique=False, nullable=False)
+    total = db.Column(db.Integer, unique=False, nullable=False)
+    semester = db.Column(db.String(100), nullable = False)
+
+    def __repr__(self):
+        return f'User: {self.total}'
+
+
+def obtain_cash_book_balances():
+	cash = CashBook.query.all()
+	obj = [i.amount if i.category =="revenue" else -1*i.amount for i in cash]
+	cum = cumsum(obj)
+	if cum.size < 1:
+		return 0
+	if cum.size >= 1:
+		return cum[-1]
+
+
+admin = Admin(app)
+admin.add_view = (ModelView(User, db.session))
+
 
 if __name__ == '__main__':
 	app.run(debug = True)
