@@ -1145,7 +1145,7 @@ admin.add_view(MyModelView(CashBook, db.session))
 admin.add_view(MyModelView(PTAIncome, db.session))
 
 if __name__ == '__main__':
-	app.run(debug = True)
+	app.run(debug = False)
 
 
 
