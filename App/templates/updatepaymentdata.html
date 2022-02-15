@@ -30,13 +30,6 @@
 					{{ form.fullname(class = "form-control shadow-sm text-center fw-bold text-danger")}}
 				</div>
 				<div class="col-md-12">
-					{{ form.parent_contact.label(class = "form-label shadow-sm text-dark fw-bold")}}
-						{% if form.parent_contact.errors %}
-							<div> {{form.parent_contact.errors[0]}}</div>
-						{% endif %}
-					{{ form.parent_contact(class = "form-control shadow-sm text-center fw-bold text-danger")}}
-				</div>
-				<div class="col-md-12">
 					{{ form.amount.label(class = "form-label shadow-sm text-dark fw-bold")}}
 					{{ form.amount(class = "form-control shadow-sm text-center fw-bold text-danger")}}
 				</div>
